@@ -37,6 +37,7 @@ contract Match is ReentrancyGuard, Ownable, ERC20 {
     constructor(uint256 Interval, uint256 Price, string memory name, string memory symbol) ERC20(name, symbol) Ownable() {
         interval = Interval;
         price = Price;
+        pool = 0;
     }
 
     //Platform setting.
