@@ -3,13 +3,18 @@ pragma solidity >=0.8.0;
 
 import "./ReentrancyGuard.sol";
 import "./Ownable.sol";
-import "./Token/ERC20.sol";
+import "./Token/ERC721/extensions/ERC721URIStorage.sol";
+import "./utils/Counters.sol";
 
-contract Match is ReentrancyGuard, Ownable, ERC20 {
+contract Match is ReentrancyGuard, Ownable, ERC721URIStorage {
+    using Counters for Counters.Counter;
+    Counters.Counter private _tokenIds;
+
     //Base system information.
     uint256 public interval;
     uint256 public price;
-    uint256 public pool;
+    uint256 public participants;
+    address public KYC;
 
     enum Gender{Woman, Man}
 
@@ -23,6 +28,8 @@ contract Match is ReentrancyGuard, Ownable, ERC20 {
 
     mapping(address => uint256) time;
 
+    mapping(address => uint256) number;
+
     mapping(string => mapping(Gender => uint256[])) contact;
 
 
@@ -34,10 +41,20 @@ contract Match is ReentrancyGuard, Ownable, ERC20 {
 
     event newJoiner(uint8 gender, string[3] interest);
 
-    constructor(uint256 Interval, uint256 Price, string memory name, string memory symbol) ERC20(name, symbol) Ownable() {
+    constructor(uint256 Interval, uint256 Price, string memory name, string memory symbol) ERC721(name, symbol) Ownable() {
         interval = Interval;
         price = Price;
-        pool = 0;
+    }
+
+    function awardItem(address player, string memory tokenURI) internal returns (uint256)
+    {
+        _tokenIds.increment();
+
+        uint256 newItemId = _tokenIds.current();
+        _mint(player, newItemId);
+        _setTokenURI(newItemId, tokenURI);
+
+        return newItemId;
     }
 
     //Platform setting.
@@ -45,25 +62,25 @@ contract Match is ReentrancyGuard, Ownable, ERC20 {
         interval = newInterval;
         return true;
     }
-
-    function changePrice(uint256 newPrice) public onlyOwner returns(bool) {
-        price = newPrice;
-        return true;
-    }
+    //会影响到经济系统.
+    // function changePrice(uint256 newPrice) public onlyOwner returns(bool) {
+    //     price = newPrice;
+    //     return true;
+    // }
 
     //添加个人信息（参加活动）.
     //gender: 自己的性别，0为女性，1为男性.
     //hope[3]: 自己的兴趣，可以输入3个.
     //tel: 经过对称加密的联系方式.
     //hash: 哈希后的联系方式.
-    function join(uint8 gender, string[3] memory hope, string memory tel, string memory hash) public payable returns(uint256) {
+    function join(uint8 gender, string[3] memory hope, string memory hash) public payable returns(uint256) {
         require(haveJoin[msg.sender] == false);
         require(msg.value >= price);
-        pool += msg.value/2;
+        participants += 1;
 
         participation.push(partInfo({
                 who: msg.sender,
-                contactInfo: tel,
+                contactInfo: "",
                 infoHash: hash
             }));
         uint256 index = participation.length - 1;
@@ -89,13 +106,14 @@ contract Match is ReentrancyGuard, Ownable, ERC20 {
     function claim(uint8 gender, uint256 seed, string[3] memory hope) public payable nonReentrant returns(string memory) {
         require(block.timestamp > time[msg.sender] + interval);
         require(msg.value >= price);
-        pool += msg.value/2;
 
         for(uint8 i = 0; i < hope.length; i++) {
             require(isExist[hope[i]] == true, string(abi.encodePacked("The user interested in ", hope[i], "does not exist")));
         }
         string memory URI = getURI(gender, seed, hope);
         time[msg.sender] = block.timestamp;
+
+        awardItem(msg.senbder, URI);
         return URI;
     }
 
@@ -106,7 +124,7 @@ contract Match is ReentrancyGuard, Ownable, ERC20 {
         uint256 rand = random(string(abi.encodePacked(symbol, toString(seed))));
         uint256 index = sourceArray[rand % sourceArray.length];
         string memory output = participation[index].infoHash;
-        _mint(participation[index].who, 1);
+        number[participation[index].who] += 1;
         return output;
     }
 
@@ -143,18 +161,25 @@ contract Match is ReentrancyGuard, Ownable, ERC20 {
 
         return output;
     }
+    //KYC upload joiner's CP-ABE.
+    function upload(string memory _ciphertext, uint256 _userid) public returns(bool){
+        require(msg.sender == KYC);
+        participation[_userid].contactInfo = _ciphertext;
+        return true;
+    }
     //Platform withdraw contract CBDC.
     function withdraw() public onlyOwner returns(uint256) {
-        uint256 profit = address(this).balance - pool;
+        uint256 profit = price/2 * participants;
         payable(msg.sender).transfer(profit);
+        payable(KYC).transfer(profit);
 
         return profit;
     }
     //Exchange credit for CBDC.
     function exchange(uint256 amount) public nonReentrant returns(uint256) {
-        _burn(msg.sender, amount);
-        uint256 total = totalSupply();
-        uint256 get = amount*pool/total;
+        require(number[msg.sender] >= amount);
+        number[msg.sender] -= amount;
+        uint256 get = price/3 * amount;
         payable(msg.sender).transfer(get);
         
         return get;
